@@ -10,6 +10,7 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,15 +71,23 @@ static char *g_callback_cmd;
 static Mask g_mask;
 static GHashTable *g_dev_table;
 
-// Return the first non-NULL element among {a,b,c} or NULL
-// The values are evaluated only once and only if needed
-#define first_nonnull(a,b,c) \
-	({ __typeof__ (a) _a = (a);  \
-	   __typeof__ (b) _b = NULL; \
-	   __typeof__ (c) _c = NULL; \
-	   if (!_a)        _b = (b); \
-	   if (!_a && !_b) _c = (c); \
-	   _a ? _a : (_b ? _b : _c); })
+static void *LAST = &LAST;
+
+// Return the first non-NULL element among its arguments, or NULL,
+// if LAST was encountered.
+void *
+first_nonnull(void *first, ...) {
+	void *result = first;
+	va_list vl;
+
+	va_start(vl, first);
+	while(!result || result == LAST) {
+		result = va_arg(vl, void *);
+	}
+
+	va_end(vl);
+	return (result == LAST) ? NULL : result;
+}
 
 char *
 udev_get_prop (struct udev_device *dev, const char *key)
@@ -189,6 +198,7 @@ enum {
 	NODE,
 	UUID,
 	LABEL,
+	PARTUUID,
 };
 
 struct libmnt_fs *
@@ -209,6 +219,9 @@ table_search_by_str (struct libmnt_table *tbl, int type, char *str)
 		case LABEL:
 			fs = mnt_table_find_tag(tbl, "LABEL", str, MNT_ITER_FORWARD);
 			break;
+		case PARTUUID:
+			fs = mnt_table_find_tag(tbl, "PARTUUID", str, MNT_ITER_FORWARD);
+			break;
 		default:
 			return NULL;
 	}
@@ -224,7 +237,9 @@ table_search_by_dev (struct libmnt_table *tbl, Device *dev)
 	return first_nonnull(
 		table_search_by_str(tbl, NODE, dev->node),
 		table_search_by_str(tbl, UUID, udev_get_prop(dev->dev, "ID_FS_UUID")),
-		table_search_by_str(tbl, LABEL, udev_get_prop(dev->dev, "ID_FS_LABEL"))
+		table_search_by_str(tbl, LABEL, udev_get_prop(dev->dev, "ID_FS_LABEL")),
+		table_search_by_str(tbl, PARTUUID, udev_get_prop(dev->dev, "ID_PART_ENTRY_UUID")),
+		LAST
 	);
 }
 
@@ -239,7 +254,9 @@ table_search_by_udev (struct libmnt_table *tbl, struct udev_device *udev)
 	fs = first_nonnull(
 		table_search_by_str(tbl, NODE, resolved),
 		table_search_by_str(tbl, UUID, udev_get_prop(udev, "ID_FS_UUID")),
-		table_search_by_str(tbl, LABEL, udev_get_prop(udev, "ID_FS_LABEL"))
+		table_search_by_str(tbl, LABEL, udev_get_prop(udev, "ID_FS_LABEL")),
+		table_search_by_str(tbl, PARTUUID, udev_get_prop(udev, "ID_PART_ENTRY_UUID")),
+		LAST
 	);
 
 	free(resolved);
@@ -432,9 +449,11 @@ device_get_mp (Device *dev, const char *base)
 		return NULL;
 
 	// Use the first non-null field
-	unique = first_nonnull(udev_get_prop(dev->dev, "ID_FS_LABEL"),
+	unique = first_nonnull(udev_get_prop(dev->dev, "ID_PART_ENTRY_UUID"),
+			       udev_get_prop(dev->dev, "ID_FS_LABEL"),
 			       udev_get_prop(dev->dev, "ID_FS_UUID"),
-			       udev_get_prop(dev->dev, "ID_SERIAL"));
+			       udev_get_prop(dev->dev, "ID_SERIAL"),
+			       LAST);
 
 	if (!unique)
 		return NULL;
