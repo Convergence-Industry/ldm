@@ -81,7 +81,7 @@ first_nonnull(void *first, ...) {
 	va_list vl;
 
 	va_start(vl, first);
-	while(!result || result == LAST) {
+	while(!result) {
 		result = va_arg(vl, void *);
 	}
 
